@@ -1,10 +1,10 @@
 <?php
 /**
- * @package DHFTweetImporter
+ * @package DHFTweetInserter
  * @version 0.1
  */
 /*
-Plugin Name: DHF Tweet Importer
+Plugin Name: DHF Tweet Inserter
 Plugin URI: http://wordpress.org/extend/plugins/
 Description: This is plugin pulls in tweets from twitter with a specific hash tag and creates post for those tweets
 Author: Chris Sullivan and Shawn Grimes
@@ -48,10 +48,10 @@ function insertTweets(){
 	$api_url = 'http://search.twitter.com/search.json';
 	$completedURL=$api_url;
 	if($max_twitterID){
-		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100&since_id=$max_twitterID";
+		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100&since_id=$max_twitterID&include_entities=1";
 		$raw_response = wp_remote_get($completedURL); //&since_id=max _twitterID value from query above
 	}else{
-		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100";
+		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100&include_entities=1";
 		$raw_response = wp_remote_get($completedURL);
 	}
 
@@ -91,14 +91,35 @@ function insertTweets(){
 			  'post_author'   => 3,
 			  'post_category' => array(5)
 			);
-
+			
 			// Insert the post into the database
 			$newPostID=wp_insert_post( $new_post );
 	
 			add_post_meta($newPostID, '_twitterID', $result['id']);
+			
+			if($result['entities']->media){				
+				add_action('add_attachment','new_attachment');
+				foreach($result['entities']->media as $image){
+					$image = media_sideload_image($image->media_url, $newPostID);
+					update_post_meta($post_id, '_thumbnail_id', $image_id);
+					$updated_post = array(
+					  'ID' => $newPostID,
+					  'post_content'  => $text . "<p>".$image."</p>",
+					);
+					wp_update_post($updated_post);
+				}
+				remove_action('add_attachment','new_attachment');
+			}
 		}
 	}
 }
+
+function new_attachment($att_id){
+    // the post this was sideloaded into is the attachments parent!
+    $p = get_post($att_id);
+    update_post_meta($p->post_parent,'_thumbnail_id',$att_id);
+}
+
 
 register_activation_hook(__FILE__,'tweetInserter_activate');
 
@@ -113,3 +134,33 @@ register_deactivation_hook(__FILE__,'tweetInserter_deactivate');
 function tweetInserter_deactivate(){
 	wp_clear_scheduled_hook('insertTweetsEvent');
 }
+
+function clearTweetPost(){
+	global $wpdb;
+
+	$querystr="SELECT $wpdb->posts.* 
+		FROM $wpdb->posts, $wpdb->postmeta
+		WHERE $wpdb->posts.ID = $wpdb->postmeta.post_id 
+		AND $wpdb->postmeta.meta_key = '_twitterID' 
+		AND $wpdb->postmeta.meta_value > 0 
+		ORDER BY $wpdb->postmeta.meta_value DESC
+		";
+	
+	$query = $wpdb->get_results($querystr, OBJECT);
+
+	if($query){
+		global $post;
+		foreach ($query as $post){
+			$delete_result=wp_delete_post(get_the_ID());
+		}
+	}
+}
+
+//add_action('admin_notices','clearTweetPost');
+//remove_action('admin_notices','clearTweetPost');
+
+// Now we set that function up to execute when the admin_notices action is called
+//add_action( 'admin_notices', 'insertTweets' );
+
+//Uncomment the line below to turn off the adds
+//remove_action('admin_notices','insertTweets');
