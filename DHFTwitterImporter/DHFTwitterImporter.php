@@ -12,6 +12,14 @@ Version: 0.1
 Author URI: http://www.stemengine.org
 */
 
+register_activation_hook(__FILE__,'tweetInserter_activate');
+add_action('insertTweetsEvent','insertTweets');
+
+function tweetInserter_activate(){
+	wp_schedule_event(time(),'hourly','insertTweetsEvent');
+}
+
+
 function insertTweets(){
 
 	//Perform a query to get the max _twitterID value
@@ -48,10 +56,10 @@ function insertTweets(){
 	$api_url = 'http://search.twitter.com/search.json';
 	$completedURL=$api_url;
 	if($max_twitterID){
-		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100&since_id=$max_twitterID&include_entities=1";
+		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100&since_id=$max_twitterID&include_entities=1&result_type='recent'";
 		$raw_response = wp_remote_get($completedURL); //&since_id=max _twitterID value from query above
 	}else{
-		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100&include_entities=1";
+		$completedURL="$api_url?q=%23MDLove%20OR%20%23LoveMD&rpp=100&include_entities=1&result_type='recent'";
 		$raw_response = wp_remote_get($completedURL);
 	}
 
@@ -70,8 +78,22 @@ function insertTweets(){
 				$json = new Moxiecode_JSON();
 				$response = @$json->decode($raw_response['body']);
 		}
-		//echo "<H1>Twitter Search String: ".$completedURL."</H1>";
-		//echo "<H1>Twitter Result Count: ".count($response['results'])."</H1>";
+		
+		if(!function_exists('_log')){
+		  function _log( $message ) {
+			if( WP_DEBUG === true ){
+			  if( is_array( $message ) || is_object( $message ) ){
+				error_log( print_r( $message, true ) );
+			  } else {
+				error_log( $message );
+			  }
+			}
+		  }
+		}
+
+		_log("Twitter Search String: ".$completedURL);
+		_log("Twitter Search Result Count: ".count($response['results']));
+		
 		foreach ( $response['results'] as $result ) {
 			$text = $result['text'];
 			$user = $result['from_user'];
@@ -87,6 +109,7 @@ function insertTweets(){
 			$new_post = array(
 			  'post_title'    => 'Tweeted by: ' . $user,
 			  'post_content'  => $text,
+			  //'post_status'   => 'pending',
 			  'post_status'   => 'publish',
 			  'post_author'   => 3,
 			  'post_category' => array(5)
@@ -97,17 +120,33 @@ function insertTweets(){
 	
 			add_post_meta($newPostID, '_twitterID', $result['id']);
 			
+			//added today
+			//$images=$result['entities']['media'];
+			//echo "<h1>Media Count: ".count($result['entities']['media'])."</h1>";
+			_log("Media Count: ".count($result['entities']->media));
+// 			echo "<pre>".var_dump($result)."</pre>";
 			if($result['entities']->media){				
+				// add the function above to catch the attachments creation
 				add_action('add_attachment','new_attachment');
 				foreach($result['entities']->media as $image){
+// 					echo "<h1>Media URL: ".$image->media_url."</h1>";
+					require_once(ABSPATH . "wp-admin" . '/includes/image.php');
+				    require_once(ABSPATH . "wp-admin" . '/includes/file.php');
+				    require_once(ABSPATH . "wp-admin" . '/includes/media.php');
 					$image = media_sideload_image($image->media_url, $newPostID);
+					
+					_log("Image Side Loaded: $image");
+					
 					update_post_meta($post_id, '_thumbnail_id', $image_id);
 					$updated_post = array(
 					  'ID' => $newPostID,
 					  'post_content'  => $text . "<p>".$image."</p>",
 					);
+					
+					_log("Updating Post Content: ".$text . "<p>".$image."</p>");
 					wp_update_post($updated_post);
 				}
+				// we have the Image now, and the function above will have fired too setting the thumbnail ID in the process, so lets remove the hook so we don't cause any more trouble 
 				remove_action('add_attachment','new_attachment');
 			}
 		}
@@ -121,13 +160,8 @@ function new_attachment($att_id){
 }
 
 
-register_activation_hook(__FILE__,'tweetInserter_activate');
 
-function tweetInserter_activate(){
-	wp_schedule_event(time(),'hourly','insertTweetsEvent');
-}
 
-add_action('insertTweetsEvent','insertTweets');
 
 register_deactivation_hook(__FILE__,'tweetInserter_deactivate');
 
@@ -146,15 +180,30 @@ function clearTweetPost(){
 		ORDER BY $wpdb->postmeta.meta_value DESC
 		";
 	
+	//echo "<h1>Query String: ".$querystr."</h1>";
 	$query = $wpdb->get_results($querystr, OBJECT);
+	echo "<h1>Removing ".count($query)." tweet posts.</h1>";
 
 	if($query){
 		global $post;
 		foreach ($query as $post){
 			$delete_result=wp_delete_post(get_the_ID());
+			//echo "<h1>Delete Result: ".$delete_result."</h1>";
 		}
 	}
 }
+
+function checkNextRun(){
+	//wp_schedule_single_event(time(), 'insertTweetsEvent');
+	$nextRun=wp_next_scheduled( 'insertTweetsEvent' );
+	if ( $nextRun ) {
+		echo "<h1>Next Twitter Run: $nextRun</h1>";
+	}else{
+		echo "<h1>Twitter Import Not Scheduled!</h1>";
+	}
+}
+
+add_action('admin_notices','checkNextRun');
 
 //add_action('admin_notices','clearTweetPost');
 //remove_action('admin_notices','clearTweetPost');
